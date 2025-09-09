@@ -1,0 +1,9 @@
+{
+  "endpoint": "/users/{id}",
+  "method": "PUT",
+  "description": "Update user by ID",
+  "parameters": {
+    "id": "required - user ID"
+  },
+  "requiredFields": ["name", "job"]
+}

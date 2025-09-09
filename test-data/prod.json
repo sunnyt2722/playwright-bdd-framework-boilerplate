@@ -1,0 +1,43 @@
+{
+  "baseUrl": "https://prod.google.com",
+  "apiBaseUrl": "https://prod.reqres.in/api",
+  "testUser": {
+    "email": "prod.user@example.com",
+    "password": "ProdPassword123",
+    "firstName": "Production",
+    "lastName": "User"
+  },
+  "apiTestData": {
+    "validUserId": 1,
+    "testEmail": "george.bluth@reqres.in",
+    "testFirstName": "George",
+    "testLastName": "Bluth"
+  },
+  "database": {
+    "host": "prod-db.example.com",
+    "port": 3306,
+    "user": "produser",
+    "password": "prodpass",
+    "database": "proddb"
+  },
+  "timeouts": {
+    "default": 45000,
+    "api": 15000,
+    "database": 10000
+  },
+  "invalidEmail": "invalid-email-format",
+  "validationMessages": {
+    "emailRequired": "Email is required",
+    "passwordRequired": "Password is required",
+    "invalidEmailFormat": "Please enter a valid email address"
+  },
+  "searchData": {
+    "basicSearch": "Production Playwright automation",
+    "automationTesting": "prod automation testing",
+    "simpleSearch": "prod automation",
+    "newsSearch": "prod technology news",
+    "specialCharSearch": "prod@#$%",
+    "accessibilitySearch": "prod accessibility testing",
+    "mobileSearch": "prod mobile testing"
+  }
+}

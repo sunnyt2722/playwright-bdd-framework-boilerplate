@@ -1,0 +1,43 @@
+{
+  "baseUrl": "https://test.google.com",
+  "apiBaseUrl": "https://test.reqres.in/api",
+  "testUser": {
+    "email": "test.user@example.com",
+    "password": "TestPassword123",
+    "firstName": "Test",
+    "lastName": "User"
+  },
+  "apiTestData": {
+    "validUserId": 3,
+    "testEmail": "emma.wong@reqres.in",
+    "testFirstName": "Emma",
+    "testLastName": "Wong"
+  },
+  "database": {
+    "host": "test-db.example.com",
+    "port": 3306,
+    "user": "testuser",
+    "password": "testpass",
+    "database": "testdb"
+  },
+  "timeouts": {
+    "default": 35000,
+    "api": 12000,
+    "database": 8000
+  },
+  "invalidEmail": "invalid-email-format",
+  "validationMessages": {
+    "emailRequired": "Email is required",
+    "passwordRequired": "Password is required",
+    "invalidEmailFormat": "Please enter a valid email address"
+  },
+  "searchData": {
+    "basicSearch": "Test Playwright automation",
+    "automationTesting": "test automation testing",
+    "simpleSearch": "test automation",
+    "newsSearch": "test technology news",
+    "specialCharSearch": "test@#$%",
+    "accessibilitySearch": "test accessibility testing",
+    "mobileSearch": "test mobile testing"
+  }
+}

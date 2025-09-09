@@ -1,0 +1,9 @@
+{
+  "endpoint": "/users",
+  "method": "GET",
+  "description": "Get list of users",
+  "parameters": {
+    "page": "optional - page number",
+    "per_page": "optional - items per page"
+  }
+}

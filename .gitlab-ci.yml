@@ -1,0 +1,534 @@
+# ==========================================
+# GitLab CI/CD Pipeline Configuration
+# PAW Playwright BDD Test Framework
+# ==========================================
+
+stages:
+  - setup
+  - test
+  - report
+  - evaluate
+  - cleanup
+
+# ==========================================
+# Global Configuration
+# ==========================================
+
+variables:
+  # Environment Configuration (can be overridden)
+  ENV: "npe"                    # Default environment (npe, npe01, prod)
+  BROWSER: "chrome"             # Default browser (chrome, firefox)
+  TAG: "@api"                   # Default tag filter (@api for API tests)
+  ENV_FILTER: "both"            # Which environments to run: npe00, npe01, both
+  NODE_VERSION: "18"
+  
+  # Test Configuration
+  PLAYWRIGHT_VERSION: "v1.51.1-jammy"
+  TEST_TIMEOUT: "300000"  # 5 minutes
+  
+  # Pipeline Configuration
+  FF_USE_FASTZIP: "true"
+  FF_DISABLE_UMASK_FOR_DOCKER_EXECUTOR: "true"
+
+# ==========================================
+# Cache Configuration
+# ==========================================
+
+cache:
+  key: 
+    files:
+      - package-lock.json
+  paths:
+    - node_modules/
+    - ~/.cache/ms-playwright/
+  policy: pull-push
+
+# ==========================================
+# Pipeline Jobs
+# ==========================================
+
+# Setup Stage - Prepare Environment
+setup_dependencies:
+  image: mcr.microsoft.com/playwright:${PLAYWRIGHT_VERSION}
+  stage: setup
+  tags:
+    - excite
+  cache:
+    key:
+      files:
+        - package-lock.json
+    paths:
+      - node_modules/
+      - ~/.cache/ms-playwright/
+    policy: push
+  script:
+    - echo "Setting up test environment..."
+    - echo "Network connectivity check..."
+    - ping -c 3 google.com || echo "WARNING Internet connectivity issues detected"
+    - echo "Installing Node.js dependencies..."
+    - npm ci --prefer-offline --no-audit
+    - echo "Installing Playwright browsers..."
+    - npx playwright install --with-deps chromium firefox || npx playwright install chromium firefox
+    - echo "Environment setup completed"
+  artifacts:
+    paths:
+      - node_modules/
+    expire_in: 1 hour
+  # Run when any test jobs are triggered, but prevent auto-trigger on pushes
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push"
+      when: never  # DISABLED: Prevent auto-trigger on pushes
+    - when: on_success  # SUCCESS: Run for all other triggers (web, schedule, trigger)
+  retry:
+    max: 1
+    when: runner_system_failure
+
+# Test Stage - Execute Tests (Always Continue)
+playwright_tests_npe00:
+  extends: .test_template
+  variables:
+    ENV: "npe"
+    TEST_NAME: "NPE00"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push"
+      when: never  # DISABLED: Prevent auto-trigger on pushes
+    - if: '$ENV_FILTER == "npe01"'
+      when: never  # DISABLED: Skip if only NPE01 selected
+    - if: '$ENV_FILTER == "npe00" || $ENV_FILTER == "both"'
+      when: on_success  # SUCCESS: Auto-run if NPE00 or both selected
+  allow_failure: true
+
+playwright_tests_npe01:
+  extends: .test_template
+  variables:
+    ENV: "npe01" 
+    TEST_NAME: "NPE01"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push"
+      when: never  # DISABLED: Prevent auto-trigger on pushes
+    - if: '$ENV_FILTER == "npe00"'
+      when: never  # DISABLED: Skip if only NPE00 selected
+    - if: '$ENV_FILTER == "npe01" || $ENV_FILTER == "both"'
+      when: on_success  # SUCCESS: Auto-run if NPE01 or both selected
+  allow_failure: true
+
+# Base template for test jobs
+.test_template:
+  image: mcr.microsoft.com/playwright:${PLAYWRIGHT_VERSION}
+  stage: test
+  tags:
+    - excite
+  needs: ["setup_dependencies"]
+  cache:
+    key:
+      files:
+        - package-lock.json
+    paths:
+      - node_modules/
+      - ~/.cache/ms-playwright/
+    policy: pull
+  before_script:
+    - echo "Starting test execution for environment $ENV"
+    - echo "Browser is $BROWSER"
+    - echo "Environment filter is $ENV_FILTER"
+    - echo "Node version $(node --version)"
+    - echo "Playwright version $(npx playwright --version)"
+  script:
+    - |
+      set -e
+      
+      echo "DEBUG: Executing Playwright tests for ${TEST_NAME}..."
+      echo "Time:  Test timeout configured: ${TEST_TIMEOUT}ms"
+      
+      # Initialize test execution variables
+      TEST_EXIT_CODE=0
+      START_TIME=$(date +%s)
+      
+      # Execute tests with environment variables (capture exit code)
+      ENV=${ENV} \
+      BROWSER=${BROWSER} \
+      TAG="${TAG}" \
+      TESTRAIL_SUITE_ID="${TESTRAIL_SUITE_ID}" \
+      TESTRAIL_KEY="${TESTRAIL_KEY}" \
+      TESTRAIL_ENABLED="${TESTRAIL_ENABLED}" \
+      # Construct correct script name: test:npeChrome, test:npeFirefox, etc.
+      if [ "${BROWSER}" = "chrome" ]; then
+        npm run test:${ENV}Chrome || TEST_EXIT_CODE=$?
+      elif [ "${BROWSER}" = "firefox" ]; then
+        npm run test:${ENV}Firefox || TEST_EXIT_CODE=$?
+      else
+        npm run test:${ENV}Chrome || TEST_EXIT_CODE=$?
+      fi
+      
+      # Calculate execution time
+      END_TIME=$(date +%s)
+      EXECUTION_TIME=$((END_TIME - START_TIME))
+      
+      echo "Time:  ${TEST_NAME} test execution completed in ${EXECUTION_TIME} seconds"
+      echo " ${TEST_NAME} test exit code: ${TEST_EXIT_CODE}"
+      
+      # Save test results for later evaluation (with environment-specific names)
+      mkdir -p pipeline-results/
+      echo ${TEST_EXIT_CODE} > pipeline-results/test_exit_code_${ENV}.txt
+      echo ${EXECUTION_TIME} > pipeline-results/execution_time_${ENV}.txt
+      echo ${TEST_NAME} > pipeline-results/test_name_${ENV}.txt
+      
+      if [ ${TEST_EXIT_CODE} -eq 0 ]; then
+        echo "SUCCESS: ${TEST_NAME} tests passed successfully"
+        echo "PASSED" > pipeline-results/test_status_${ENV}.txt
+      else
+        echo "ERROR: ${TEST_NAME} tests failed with exit code: ${TEST_EXIT_CODE}"
+        echo "FAILED" > pipeline-results/test_status_${ENV}.txt
+      fi
+      
+      # Rename reports to be environment-specific
+      if [ -f "reports/cucumber_report.json" ]; then
+        cp reports/cucumber_report.json reports/cucumber_report_${ENV}.json
+      fi
+      if [ -f "reports/cucumber_report.html" ]; then
+        cp reports/cucumber_report.html reports/cucumber_report_${ENV}.html
+      fi
+      
+      # Always continue to report generation - DON'T exit with test failure code
+      echo " ${TEST_NAME} proceeding to report generation regardless of test results..."
+      exit 0
+  after_script:
+    - echo " Test execution phase completed"
+    - echo " Artifacts will be collected from:"
+    - echo "   - test-results/"
+    - echo "   - reports/"
+    - echo "   - screenshots/"
+    - echo "   - pipeline-results/"
+    - ls -la test-results/ 2>/dev/null || echo "WARNING No test-results directory found"
+    - ls -la reports/ 2>/dev/null || echo "WARNING No reports directory found"
+    - ls -la pipeline-results/ 2>/dev/null || echo "WARNING No pipeline-results directory found"
+  artifacts:
+    when: always  # CRITICAL: Always collect artifacts regardless of test results
+    paths:
+      - test-results/
+      - reports/
+      - screenshots/
+      - pipeline-results/  # Include test results for evaluation
+    expire_in: 1 week
+  # Prevent auto-trigger on pushes, allow manual/scheduled triggers
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push"
+      when: never  # DISABLED: Prevent auto-trigger on pushes
+    - when: on_success  # SUCCESS: Run for all other triggers (web, schedule, trigger)
+  retry:
+    max: 1
+    when: runner_system_failure
+  allow_failure: true  # Allow this job to "pass" even if tests fail
+
+# Report Stage - Generate Reports (Always Runs)
+generate_reports:
+  image: mcr.microsoft.com/playwright:${PLAYWRIGHT_VERSION}
+  stage: report
+  tags:
+    - excite
+  needs: 
+    - job: "playwright_tests_npe00"
+      optional: true  # Setting up Don't wait if NPE00 is skipped
+      artifacts: true  # Setting up Get artifacts even if job failed
+    - job: "playwright_tests_npe01" 
+      optional: true  # Setting up Don't wait if NPE01 is skipped
+      artifacts: true  # Setting up Get artifacts even if job failed
+  cache:
+    key:
+      files:
+        - package-lock.json
+    paths:
+      - node_modules/
+    policy: pull
+  script:
+    - echo "Generating test reports"
+    - npm ci --only=production
+    - npm install axios@^1.8.4 || echo "axios already installed"
+    - |
+      set -e
+      
+      # Check test status from both environments
+      echo "Pipeline Multi-Environment Test Execution Results:"
+      
+      # NPE00 Results
+      if [ -f "pipeline-results/test_status_npe.txt" ]; then
+        NPE00_STATUS=$(cat pipeline-results/test_status_npe.txt)
+        NPE00_EXIT_CODE=$(cat pipeline-results/test_exit_code_npe.txt)
+        NPE00_TIME=$(cat pipeline-results/execution_time_npe.txt)
+        echo "    NPE00:"
+        echo "      - Status: ${NPE00_STATUS}"
+        echo "      - Exit Code: ${NPE00_EXIT_CODE}"
+        echo "      - Execution Time: ${NPE00_TIME} seconds"
+      else
+        echo "   WARNING:  NPE00 results not found"
+        NPE00_STATUS="MISSING"
+      fi
+      
+      # NPE01 Results  
+      if [ -f "pipeline-results/test_status_npe01.txt" ]; then
+        NPE01_STATUS=$(cat pipeline-results/test_status_npe01.txt)
+        NPE01_EXIT_CODE=$(cat pipeline-results/test_exit_code_npe01.txt)
+        NPE01_TIME=$(cat pipeline-results/execution_time_npe01.txt)
+        echo "    NPE01:"
+        echo "      - Status: ${NPE01_STATUS}"
+        echo "      - Exit Code: ${NPE01_EXIT_CODE}"
+        echo "      - Execution Time: ${NPE01_TIME} seconds"
+      else
+        echo "   WARNING:  NPE01 results not found"
+        NPE01_STATUS="MISSING"
+      fi
+      
+      # Overall Status - ENV_FILTER aware logic
+      echo "   Setting up Environment Filter: ${ENV_FILTER}"
+      
+      if [ "${ENV_FILTER}" = "npe00" ]; then
+        # Only NPE00 should run
+        if [ "${NPE00_STATUS}" = "PASSED" ]; then
+          OVERALL_STATUS="PASSED"
+          echo "    Overall Status: NPE00 PASSED"
+        elif [ "${NPE00_STATUS}" = "MISSING" ]; then
+          OVERALL_STATUS="ERROR"
+          echo "   ERROR: Overall Status: NPE00 RESULTS NOT FOUND"
+        else
+          OVERALL_STATUS="FAILED"
+          echo "   ERROR: Overall Status: NPE00 FAILED"
+        fi
+      elif [ "${ENV_FILTER}" = "npe01" ]; then
+        # Only NPE01 should run
+        if [ "${NPE01_STATUS}" = "PASSED" ]; then
+          OVERALL_STATUS="PASSED"
+          echo "    Overall Status: NPE01 PASSED"
+        elif [ "${NPE01_STATUS}" = "MISSING" ]; then
+          OVERALL_STATUS="ERROR"
+          echo "   ERROR: Overall Status: NPE01 RESULTS NOT FOUND"
+        else
+          OVERALL_STATUS="FAILED"
+          echo "   ERROR: Overall Status: NPE01 FAILED"
+        fi
+      else
+        # Both environments should run (ENV_FILTER = "both" or default)
+        if [ "${NPE00_STATUS}" = "PASSED" ] && [ "${NPE01_STATUS}" = "PASSED" ]; then
+          OVERALL_STATUS="PASSED"
+          echo "    Overall Status: ALL ENVIRONMENTS PASSED"
+        elif [ "${NPE00_STATUS}" = "MISSING" ] && [ "${NPE01_STATUS}" = "MISSING" ]; then
+          OVERALL_STATUS="ERROR"
+          echo "   ERROR: Overall Status: NO RESULTS FOUND"
+        else
+          OVERALL_STATUS="FAILED"
+          echo "   WARNING:  Overall Status: SOME ENVIRONMENTS FAILED"
+        fi
+      fi
+      
+      echo ${OVERALL_STATUS} > pipeline-results/overall_status.txt
+      
+      # Pre-report diagnostics
+      echo "DEBUG: Pre-report diagnostics:"
+      echo "   - Reports directory exists: $([ -d "reports" ] && echo "SUCCESS: Yes" || echo "ERROR: No")"
+      echo "   - Cucumber JSON exists: $([ -f "reports/cucumber_report.json" ] && echo "SUCCESS: Yes" || echo "ERROR: No")"
+      echo "   - Pipeline results exist: $([ -d "pipeline-results" ] && echo "SUCCESS: Yes" || echo "ERROR: No")"
+      
+      # Ensure reports directory exists
+      mkdir -p reports
+      
+      # Generate HTML reports with robust error handling
+      echo " Creating HTML test report..."
+      REPORT_GENERATION_FAILED=0
+      
+      # Ensure we have the necessary files before attempting report generation
+      echo "   Pre-generation checks:"
+      if [ -f "reports/cucumber_report.json" ]; then
+        echo "   SUCCESS: JSON report found"
+      else
+        echo "   WARNING: JSON report missing - checking for environment-specific reports"
+        if [ -f "reports/cucumber_report_npe.json" ] || [ -f "reports/cucumber_report_npe01.json" ]; then
+          echo "   SUCCESS: Environment-specific reports found"
+        else
+          echo "   ERROR: No JSON reports found - report generation may fail"
+        fi
+      fi
+      
+      # First attempt: Standard report generation
+      echo "   Attempting standard report generation..."
+      if node ./utils/generateReport.js; then
+        echo "SUCCESS: Standard report generation succeeded"
+      else
+        echo "ERROR: Standard report generation failed, attempting fallback..."
+        REPORT_GENERATION_FAILED=1
+      fi
+      
+      # Validate report generation and retry if needed
+      if [ ! -f "reports/multiple-cucumber-html-report/index.html" ]; then
+        echo "ERROR: HTML report index.html not found, attempting emergency generation..."
+        
+        # Try the safe report generation script
+        if [ -f "scripts/generate-report-safe.js" ]; then
+          echo "  Attempting safe report generation..."
+          node scripts/generate-report-safe.js || echo "WARNING:  Safe report generation also failed"
+        fi
+        
+        # Final check after retry
+        if [ ! -f "reports/multiple-cucumber-html-report/index.html" ]; then
+          echo " Creating emergency basic HTML report..."
+          mkdir -p reports/multiple-cucumber-html-report
+          
+          # Create a simple emergency HTML report without complex heredoc
+          echo '<!DOCTYPE html><html><head><title>PAW BDD Test Results - Emergency Report</title></head><body>' > reports/multiple-cucumber-html-report/index.html
+          echo '<h1>PAW Automation Test Execution Report</h1>' >> reports/multiple-cucumber-html-report/index.html
+          echo '<h2>Emergency Report</h2>' >> reports/multiple-cucumber-html-report/index.html
+          echo '<p><strong>WARNING: Emergency Report:</strong> Standard report generation failed.</p>' >> reports/multiple-cucumber-html-report/index.html
+          echo "<p><strong>Test Status:</strong> ${TEST_STATUS:-UNKNOWN}</p>" >> reports/multiple-cucumber-html-report/index.html
+          echo "<p><strong>Execution Time:</strong> ${EXECUTION_TIME:-0} seconds</p>" >> reports/multiple-cucumber-html-report/index.html
+          echo "<p><strong>Generated:</strong> $(date)</p>" >> reports/multiple-cucumber-html-report/index.html
+          echo '<p>Please check the GitLab pipeline logs for detailed error information.</p>' >> reports/multiple-cucumber-html-report/index.html
+          echo '</body></html>' >> reports/multiple-cucumber-html-report/index.html
+          echo " Emergency HTML report created"
+        fi
+      fi
+      
+      # Final validation
+      if [ -f "reports/multiple-cucumber-html-report/index.html" ]; then
+        echo "SUCCESS: HTML report generated successfully"
+        echo " Report location: reports/multiple-cucumber-html-report/index.html"
+        
+        # Check file size to ensure it's not empty
+        REPORT_SIZE=$(stat -f%z "reports/multiple-cucumber-html-report/index.html" 2>/dev/null || stat -c%s "reports/multiple-cucumber-html-report/index.html" 2>/dev/null || echo "0")
+        echo "SIZE: Report file size: ${REPORT_SIZE} bytes"
+        
+        if [ "$REPORT_SIZE" -gt 500 ]; then
+          echo "SUCCESS: Report appears to have substantial content"
+        else
+          echo "WARNING:  Report file seems unusually small - may be incomplete"
+        fi
+      else
+        echo "ERROR: Failed to generate any HTML report - this should not happen"
+        # Still continue as we want artifacts to be collected
+      fi
+      
+      # Generate summary statistics
+      echo " Test Execution Summary:"
+      if [ -f "reports/cucumber_report.json" ]; then
+        echo "   - JSON report: SUCCESS: Available"
+        JSON_SIZE=$(stat -f%z "reports/cucumber_report.json" 2>/dev/null || stat -c%s "reports/cucumber_report.json" 2>/dev/null || echo "0")
+        echo "   - JSON report size: ${JSON_SIZE} bytes"
+      else
+        echo "   - JSON report: ERROR: Missing"
+      fi
+      
+      # List all generated report files
+      echo "Available Generated report files:"
+      find reports/ -type f -name "*.html" -o -name "*.json" | head -10 | while read file; do
+        echo "   - $file"
+      done
+      
+      echo "SUCCESS: Report generation phase completed"
+      
+      # CRITICAL: Ensure overall_status.txt always exists for evaluation stage
+      if [ ! -f "pipeline-results/overall_status.txt" ]; then
+        echo "ERROR: overall_status.txt not found, creating emergency status file"
+        mkdir -p pipeline-results/
+        echo "ERROR" > pipeline-results/overall_status.txt
+        echo "CRITICAL: Emergency status file created - report generation may have failed"
+      else
+        echo "SUCCESS: overall_status.txt verified - evaluation stage can proceed"
+        echo "   Status: $(cat pipeline-results/overall_status.txt)"
+      fi
+      
+      echo "DEBUG: Main script - TEAMS_WEBHOOK_URL length: ${#TEAMS_WEBHOOK_URL}"
+      
+      # Save TEAMS_WEBHOOK_URL to file for after_script access
+      if [ -n "$TEAMS_WEBHOOK_URL" ]; then
+        echo "$TEAMS_WEBHOOK_URL" > /tmp/teams_webhook_url.txt
+        echo "SUCCESS: TEAMS_WEBHOOK_URL saved to file for after_script"
+      else
+        echo "WARNING: TEAMS_WEBHOOK_URL not available in main script"
+      fi
+  after_script:
+    - echo "Teams notification check - Pipeline source is $CI_PIPELINE_SOURCE"
+    - |
+      if [ "$CI_PIPELINE_SOURCE" = "schedule" ]; then
+        echo "Scheduled pipeline detected - sending Teams notification"
+        npm ci --only=production --silent
+        node scripts/send-teams-notification.js "$ENV_FILTER"
+      else
+        echo "Not a scheduled pipeline - skipping Teams notification"
+      fi
+
+  artifacts:
+    when: always
+    paths:
+      - reports/
+      - pipeline-results/
+    expire_in: 1 week
+  # Prevent auto-trigger on pushes, allow manual/scheduled triggers
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push"
+      when: never  # DISABLED: Prevent auto-trigger on pushes
+    - when: on_success  # SUCCESS: Run for all other triggers (web, schedule, trigger)
+  retry:
+    max: 1
+    when: runner_system_failure
+  allow_failure: false  # Report generation must succeed for evaluation stage
+
+# Evaluate Stage - Final Test Result Evaluation
+evaluate_test_results:
+  stage: evaluate
+  image: alpine:latest
+  tags:
+    - excite
+  needs: 
+    - job: "generate_reports"
+      artifacts: true
+  script:
+    - 'echo "EVALUATE: Final test results"'
+    - 'echo "Environment filter is $ENV_FILTER"'
+    - 'echo "Checking for pipeline results..."'
+    - 'ls -la pipeline-results/ || echo "No pipeline-results directory found"'
+    - 'test -f "pipeline-results/overall_status.txt" || (echo "ERROR: No overall test results found" && ls -la pipeline-results/ 2>/dev/null && exit 1)'
+    - 'OVERALL_STATUS=$(cat pipeline-results/overall_status.txt)'
+    - 'echo "STATUS: Overall status is $OVERALL_STATUS"'
+    - 'echo "DETAILS: Test results breakdown:"'
+    - 'test -f "pipeline-results/test_status_npe.txt" && echo "  NPE00:" $(cat pipeline-results/test_status_npe.txt) || echo "  NPE00: Not found"'
+    - 'test -f "pipeline-results/test_status_npe01.txt" && echo "  NPE01:" $(cat pipeline-results/test_status_npe01.txt) || echo "  NPE01: Not found"'
+    - |
+      if [ "$OVERALL_STATUS" = "FAILED" ]; then
+        echo "FAIL: Tests failed - Pipeline will FAIL"
+        exit 1
+      elif [ "$OVERALL_STATUS" = "ERROR" ]; then
+        echo "ERROR: Execution error - Pipeline will FAIL"
+        exit 2
+      else
+        echo "PASS: All tests passed - Pipeline will PASS"
+        exit 0
+      fi
+  artifacts:
+    when: always
+    paths:
+      - pipeline-results/
+    expire_in: 1 week
+  # Prevent auto-trigger on pushes, allow manual/scheduled triggers
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push"
+      when: never  # DISABLED: Prevent auto-trigger on pushes
+    - when: on_success  # SUCCESS: Run for all other triggers (web, schedule, trigger)
+  allow_failure: false  # This job should fail if tests failed
+
+# Cleanup Stage - Optional cleanup tasks
+cleanup_artifacts:
+  stage: cleanup
+  image: alpine:latest
+  tags:
+    - excite
+  needs: ["evaluate_test_results"]
+  script:
+    - echo " Performing cleanup tasks..."
+    - echo " Final artifact summary:"
+    - find reports/ -name "*.html" 2>/dev/null || echo "No HTML reports found"
+    - find reports/ -name "*.json" 2>/dev/null || echo "No JSON reports found"
+    - echo "Pipeline execution completed"
+  when: always
+  # Prevent auto-trigger on pushes, allow manual/scheduled triggers
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push"
+      when: never  # DISABLED: Prevent auto-trigger on pushes
+    - when: on_success  # SUCCESS: Run for all other triggers (web, schedule, trigger)
+  allow_failure: true  # Cleanup should not fail the pipeline

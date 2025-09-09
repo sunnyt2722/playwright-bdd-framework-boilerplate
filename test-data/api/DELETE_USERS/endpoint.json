@@ -1,0 +1,8 @@
+{
+  "endpoint": "/users/{id}",
+  "method": "DELETE",
+  "description": "Delete user by ID",
+  "parameters": {
+    "id": "required - user ID"
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "endpoint": "/users",
+  "method": "POST",
+  "description": "Create new user",
+  "requiredFields": ["name", "job"]
+}
