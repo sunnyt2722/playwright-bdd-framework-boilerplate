@@ -1,0 +1,7 @@
+# Dependencies 
+node_modules/ 
+test-results/  
+reports/  
+.env  
+.vscode/  
+.idea/ 

@@ -1,10 +1,10 @@
 {
-  "startTime": "2025-09-06T23:38:08.463Z",
+  "startTime": "2025-09-13T08:59:04.394Z",
   "browser": "chrome",
   "environment": "dev",
   "framework": "PAW Playwright BDD",
   "version": "1.0.0",
-  "endTime": "2025-09-06T23:38:09.380Z",
-  "totalDuration": 917,
-  "totalScenarios": 1
+  "endTime": "2025-09-13T08:59:25.731Z",
+  "totalDuration": 21337,
+  "totalScenarios": 11
 }
